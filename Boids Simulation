@@ -1,0 +1,414 @@
+import random
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import *
+from PyQt5.QtCore import *
+import sys
+from time import sleep
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+
+world_width = 500
+world_height = 500
+
+max_speed = 2
+min_speed = 0
+
+max_acceleration = 1
+number_of_boids = 40
+boid_list = []
+
+#Boids Should Be Odd Sizes - So They Have A Nice Middle
+boid_size = 5
+
+neighbourhood_radius = 50
+sight_distance = neighbourhood_radius / 2
+
+random_weight = 3
+matching_weight = 17
+central_weight = 37
+collision_weight = 99
+chase_weight = 0
+
+boundaries = 0
+mouse_pos = [0,0]
+
+
+obstacles = [[50, 50, 5],
+             [55, 50, 5],
+             [60, 50, 5],
+             [65, 50, 5],
+             [70, 50, 5],
+             [75, 50, 5]]
+
+
+def get_attractive_force(distance):
+    attractive_force = 1 / distance ** 2
+    return attractive_force
+
+def get_repulsive_force(distance):
+    repulsive_force = -1 * (2 * (1 / distance**4))
+    return repulsive_force
+
+def calculate_distance(from_coords, to_coords):
+    x_distance = to_coords[0] - from_coords[0]
+    y_distance = to_coords[1] - from_coords[1]
+    total_distance_squared = x_distance**2 + y_distance**2
+    total_distance = math.sqrt(total_distance_squared) - boid_size
+    return total_distance
+
+def normalise_vector(x_component, y_component):
+    length = math.sqrt(x_component**2 + y_component**2)
+    normalised_x = float(x_component / length)
+    normalised_y = float(y_component / length)
+    return normalised_x, normalised_y
+
+def get_random_unit_vector():
+    velocity_x = random.uniform(-1, 1)
+    velocity_y = random.uniform(-1, 1)
+    velocity_x, velocity_y = normalise_vector(velocity_x, velocity_y)
+    return velocity_x, velocity_y
+
+def clip_vector_to_max_speed(vector_x, vector_y):
+    vector_length = math.sqrt(vector_x**2 + vector_y**2)
+
+    if vector_length <= max_speed:
+        return vector_x, vector_y
+
+    else:
+        reduction_factor = vector_length / max_speed
+        clipped_vector_x = vector_x / reduction_factor
+        clipped_vector_y = vector_y / reduction_factor
+        return clipped_vector_x, clipped_vector_y
+
+
+class window(QWidget):
+
+    def __init__(self, parent=None):
+        super(window, self).__init__(parent)
+        self.setWindowTitle("Flocking Simulation")
+        self.setGeometry(QRect(0, 0, 750, 500))
+
+        self.graphics_view = QGraphicsView()
+        self.scene = QGraphicsScene(0, 0, world_width, world_height)
+
+        #self.scene.setSceneRect(0, 0, world_width, world_height)
+        #self.scene.setFixedSize(world_width, world_height)
+        #self.graphics_view.setFixedSize(world_width, world_height)
+        #self.graphics_view.centerOn(world_width / 2, world_height / 2)
+
+        #self.graphics_view.setSceneRect(0,0, world_width, world_height)
+        self.graphics_view.setScene(self.scene)
+        self.graphics_view.setMouseTracking(True)
+        #self.graphics_view.mouseMoveEvent = self.mouse_moved()
+
+        #Add Sliders
+        self.random_slider      = QSlider(Qt.Horizontal)
+        self.central_slider     = QSlider(Qt.Horizontal)
+        self.collision_slider   = QSlider(Qt.Horizontal)
+        self.matching_slider    = QSlider(Qt.Horizontal)
+        self.chase_slider       = QSlider(Qt.Horizontal)
+
+        self.random_slider.valueChanged.connect(self.random_slider_changed)
+        self.central_slider.valueChanged.connect(self.central_slider_changed)
+        self.collision_slider.valueChanged.connect(self.collision_slider_changed)
+        self.matching_slider.valueChanged.connect(self.matching_slider_changed)
+        self.chase_slider.valueChanged.connect(self.chase_slider_changed)
+
+        self.random_slider_label    = QLabel("Random Force")
+        self.central_slider_label   = QLabel("Central Force")
+        self.collision_slider_label = QLabel("Collision Avoidance")
+        self.matching_slider_label  = QLabel("Velocity Matching")
+        self.chase_slider_label     = QLabel("Chasing")
+
+        self.random_slider_value_label      = QLabel(str(random_weight))
+        self.central_slider_value_label     = QLabel(str(central_weight))
+        self.collision_slider_value_label   = QLabel(str(collision_weight))
+        self.matching_slider_value_label    = QLabel(str(matching_weight))
+        self.chase_slider_value_label       = QLabel(str(chase_weight))
+
+        self.boundaries_tickbox = QCheckBox("Boundaries")
+        self.boundaries_tickbox.stateChanged.connect(self.boundaries_changed)
+
+        self.layout = QGridLayout()
+        self.layout.addWidget(self.graphics_view,                 0, 0, 20, 1)
+
+        self.layout.addWidget(self.random_slider_label,           0, 1, 1, 1)
+        self.layout.addWidget(self.central_slider_label,          1, 1, 1, 1)
+        self.layout.addWidget(self.collision_slider_label,        2, 1, 1, 1)
+        self.layout.addWidget(self.matching_slider_label,         3, 1, 1, 1)
+        self.layout.addWidget(self.chase_slider_label,            4, 1, 1, 1)
+
+        self.layout.addWidget(self.random_slider,                 0, 2, 1, 1)
+        self.layout.addWidget(self.central_slider,                1, 2, 1, 1)
+        self.layout.addWidget(self.collision_slider,              2, 2, 1, 1)
+        self.layout.addWidget(self.matching_slider,               3, 2, 1, 1)
+        self.layout.addWidget(self.chase_slider,                  4, 2, 1, 1)
+
+        self.layout.addWidget(self.random_slider_value_label,     0, 3, 1, 1)
+        self.layout.addWidget(self.central_slider_value_label,    1, 3, 1, 1)
+        self.layout.addWidget(self.collision_slider_value_label,  2, 3, 1, 1)
+        self.layout.addWidget(self.matching_slider_value_label,   3, 3, 1, 1)
+        self.layout.addWidget(self.chase_slider_value_label,      4, 3, 1, 1)
+
+        self.layout.addWidget(self.boundaries_tickbox,            5, 1, 1, 3)
+
+        self.setLayout(self.layout)
+
+        self.show()
+
+    def mouse_moved(self):
+        print("moved")
+
+    def boundaries_changed(self):
+        global boundaries
+
+        boundaries = self.boundaries_tickbox.isChecked()
+        print("Boundaries", boundaries)
+
+    def random_slider_changed(self):
+        global random_weight
+        random_weight = self.random_slider.value()
+        self.random_slider_value_label.setText(str(random_weight))
+
+    def collision_slider_changed(self):
+        global collision_weight
+        collision_weight = self.collision_slider.value()
+        self.collision_slider_value_label.setText(str(collision_weight))
+
+    def matching_slider_changed(self):
+        global matching_weight
+        matching_weight = self.matching_slider.value()
+        self.matching_slider_value_label.setText(str(matching_weight))
+
+    def central_slider_changed(self):
+        global central_weight
+        central_weight = self.central_slider.value()
+        self.central_slider_value_label.setText(str(central_weight))
+
+    def chase_slider_changed(self):
+        global chase_weight
+        chase_weight = float(self.chase_slider.value()) / 10
+        self.chase_slider_value_label.setText(str(chase_weight))
+
+
+
+
+class boid():
+
+    def __init__(self):
+        self.xpos = 0
+        self.ypos = 0
+
+        #Set Initial Velocity
+        self.initial_speed = random.uniform(0, max_speed)
+        x_unit_vector, y_unit_vector = get_random_unit_vector()
+        self.velocity_x = x_unit_vector * self.initial_speed
+        self.velocity_y = y_unit_vector * self.initial_speed
+
+        self.icon = QGraphicsEllipseItem(self.xpos, self.ypos, boid_size, boid_size)
+
+        self.neighbour_dict = {}
+
+
+    def update_velocity(self):
+        self.get_neighbours()
+
+        #Add Random Component
+        random_x_vector, random_y_vector = get_random_unit_vector()
+        self.velocity_x += random_x_vector * random_weight
+        self.velocity_y += random_y_vector * random_weight
+
+        #Get Velocity Matching Component
+        matching_vector = self.get_matching_vector()
+        self.velocity_x += matching_vector[0] * matching_weight
+        self.velocity_y += matching_vector[1] * matching_weight
+
+        #Get Central Vector
+        central_vector = self.get_central_vector()
+        self.velocity_x += central_vector[0] * central_weight
+        self.velocity_y += central_vector[1] * central_weight
+
+        #Get Collision Avoidance Vector
+        collision_vector = self.get_collision_vector()
+        self.velocity_x += collision_vector[0] * collision_weight
+        self.velocity_y += collision_vector[1] * collision_weight
+
+        #Get Mouse Chasing Vector
+        chase_vector = self.get_chase_vector()
+        self.velocity_x += chase_vector[0] * chase_weight
+        self.velocity_y += chase_vector[1] * chase_weight
+
+        self.velocity_x, self.velocity_y = clip_vector_to_max_speed(self.velocity_x, self.velocity_y)
+
+
+    def update_position(self):
+        self.xpos += self.velocity_x
+        self.ypos += self.velocity_y
+
+        if self.xpos < 0:
+            if boundaries == 1:
+                self.xpos = 0
+            else:
+                self.xpos = world_width
+
+        elif self.xpos > world_width:
+            if boundaries == 1:
+                self.xpos = world_width
+            else:
+                self.xpos = 0
+
+        if self.ypos < 0:
+            if boundaries == 1:
+                self.ypos = 0
+            else:
+                self.ypos = world_height
+        elif self.ypos > world_height:
+            if boundaries == 1:
+                self.ypos = world_height
+            else:
+                self.ypos = 0
+
+        self.icon.setPos(self.xpos, self.ypos)
+
+    def get_position(self):
+        return [self.xpos, self.ypos]
+
+    def get_velocity(self):
+        return [self.initial_speed, self.velocity_x, self.velocity_y]
+
+    def get_neighbours(self):
+        self.neighbour_dict = {}
+        for other_boid in boid_list:
+            if other_boid == self:
+                pass
+            else:
+                other_postion = other_boid.get_position()
+                distance = calculate_distance(self.get_position(), other_postion)
+
+                if distance < neighbourhood_radius:
+                    self.neighbour_dict[other_boid] = distance
+
+
+    def get_matching_vector(self):
+        x_components = [0]
+        y_components = [0]
+
+        for neighbour in self.neighbour_dict.keys():
+            distance = self.neighbour_dict[neighbour]
+
+            if distance > 0:
+                neighbour_velocity = neighbour.get_velocity()
+                x_components.append(neighbour_velocity[0] * (neighbour_velocity[1] * (1 / (distance ** 2))))
+                y_components.append(neighbour_velocity[0] * (neighbour_velocity[2] * (1 / (distance ** 2))))
+
+        matching_vector = [np.sum(x_components), np.sum(y_components)]
+        return matching_vector
+
+    def get_central_vector(self):
+        x_components = [0]
+        y_components = [0]
+
+        for neighbour in self.neighbour_dict.keys():
+            distance = self.neighbour_dict[neighbour]
+
+            if distance > 0:
+                neighbour_position = neighbour.get_position()
+                x_vector = neighbour_position[0] - self.xpos
+                y_vector = neighbour_position[1] - self.ypos
+                attractive_force = get_attractive_force(distance)
+                x_components.append(x_vector * attractive_force)
+                y_components.append(y_vector * attractive_force)
+
+        return [np.mean(x_components), np.mean(y_components)]
+
+
+    def get_collision_vector(self):
+        x_components = [0]
+        y_components = [0]
+
+        for neighbour in self.neighbour_dict.keys():
+            distance = self.neighbour_dict[neighbour]
+
+            if distance > 0:
+                neighbour_position = neighbour.get_position()
+                x_vector = neighbour_position[0] - self.xpos
+                y_vector = neighbour_position[1] - self.ypos
+                repulsive_force = get_repulsive_force(distance)
+                x_components.append(x_vector * repulsive_force)
+                y_components.append(y_vector * repulsive_force)
+
+        for obstacle in obstacles:
+            distance = calculate_distance([self.xpos, self.ypos],[obstacle[0],obstacle[1]])
+            if distance < neighbourhood_radius:
+                x_vector = obstacle[0] - self.xpos
+                y_vector = obstacle[1] - self.ypos
+                repulsive_force = get_repulsive_force(distance)
+                x_components.append(x_vector * repulsive_force)
+                y_components.append(y_vector * repulsive_force)
+
+
+        return [np.mean(x_components), np.mean(y_components)]
+
+
+    def get_chase_vector(self):
+        distance = calculate_distance([self.xpos, self.ypos], [mouse_pos[0], mouse_pos[1]])
+        x_vector = (mouse_pos[0] - self.xpos) / distance #**2
+        y_vector = (mouse_pos[1] - self.ypos) / distance #**2
+        return [x_vector, y_vector]
+
+
+def update_positions():
+    global mouse_pos
+    mouse_pos = get_mouse_pos()
+
+    for boid in boid_list:
+        boid.update_velocity()
+
+    for boid in boid_list:
+        boid.update_position()
+
+
+def get_mouse_pos():
+    global_pos = QCursor.pos()
+    view_pos = main_window.graphics_view.mapFromGlobal(global_pos)
+    scene_pos = main_window.graphics_view.mapToScene(view_pos)
+    mouse_pos = [scene_pos.x(), scene_pos.y()]
+    return mouse_pos
+
+
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    main_window = window()
+
+    #Create Initial Flock
+    for boid_index in range(number_of_boids):
+        new_boid = boid()
+        boid_list.append(new_boid)
+        main_window.scene.addItem(new_boid.icon)
+
+    #Add Static Obstacles
+    for obstacle in obstacles:
+        graphic =  QGraphicsEllipseItem(obstacle[0], obstacle[1], obstacle[2], obstacle[2])
+        main_window.scene.addItem(graphic)
+
+    #Set Initial Positions
+    for boid in boid_list:
+        boid.xpos = random.randint(50, world_width-50)
+        boid.ypos = random.randint(50, world_height-50)
+        boid.icon.setPos(boid.xpos, boid.ypos)
+
+
+    #Run Simulation
+    for x in range(100000):
+        update_positions()
+        #sleep(0.02)
+        main_window.scene.update()
+        app.processEvents()
+        #print(x)
+
+    sys.exit(app.exec_())
+
